@@ -1,321 +1,435 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { num, t, time as fmtTime, useT } from "../lib/i18n";
+import type { Story, User } from "../lib/state";
+import { themeById, uid } from "../lib/state";
 import type { TrackRuntime } from "../lib/catalog";
-import { artistById, faNum } from "../lib/catalog";
-import Visualizer from "./Visualizer";
-import { IconDownload, IconPause, IconPlay, IconShare, IconX, Logo } from "./icons";
+import { IconBookmark, IconComment, IconHeart, IconMusic, IconPause, IconPlay, IconSend, IconShare, IconVideo, IconX } from "./icons";
 
 interface Props {
-  items: TrackRuntime[];
+  stories: Story[];
   index: number;
-  playing: boolean;
-  analyser: AnalyserNode | null;
   onNavigate: (i: number) => void;
   onClose: () => void;
-  onTogglePlay: () => void;
-  onHold: (hold: boolean) => void;
-  onShare: (t: TrackRuntime) => Promise<void> | void;
+  user: User | null;
+  tracks: TrackRuntime[];
+  playingId: string | null;
+  isPlaying: boolean;
+  onPlayTrack: (id: string) => void;
+  onLike: (id: string) => void;
+  onComment: (id: string, text: string) => void;
+  onSave: (id: string) => void;
+  savedIds: string[];
+  onRequireAuth: () => void;
+  onToast: (msg: string) => void;
 }
 
-const STORY_SECONDS = 15;
+const STORY_MS = 15000;
 
-function drawGirihStar(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number) {
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.strokeRect(-r, -r, r * 2, r * 2);
-  ctx.rotate(Math.PI / 4);
-  ctx.strokeRect(-r, -r, r * 2, r * 2);
-  ctx.restore();
-}
-
-function wrapTitle(ctx: CanvasRenderingContext2D, text: string, maxW: number, maxLines = 3): string[] {
-  const words = text.split(" ");
-  const lines: string[] = [];
-  let cur = "";
-  for (const w of words) {
-    const test = cur ? `${cur} ${w}` : w;
-    if (ctx.measureText(test).width > maxW && cur) {
-      lines.push(cur);
-      cur = w;
-      if (lines.length === maxLines) break;
-    } else cur = test;
-  }
-  if (lines.length < maxLines && cur) lines.push(cur);
-  return lines;
-}
-
-/** کارت استوری ۹:۱۶ — خروجی PNG با کیفیت برای اشتراک‌گذاری. */
-async function exportStoryCard(track: TrackRuntime): Promise<Blob> {
-  await document.fonts.ready.catch(() => undefined);
-  const W = 1080;
-  const H = 1920;
-  const c = document.createElement("canvas");
-  c.width = W;
-  c.height = H;
-  const ctx = c.getContext("2d")!;
-  const h = track.hue;
-
-  const bg = ctx.createLinearGradient(0, 0, W * 0.3, H);
-  bg.addColorStop(0, `hsl(${h} 42% 15%)`);
-  bg.addColorStop(0.55, `hsl(${h} 50% 8%)`);
-  bg.addColorStop(1, "#070f0e");
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, W, H);
-
-  const glow = ctx.createRadialGradient(W / 2, H * 0.3, 40, W / 2, H * 0.3, 900);
-  glow.addColorStop(0, `hsla(${h} 85% 55% / 0.35)`);
-  glow.addColorStop(1, "transparent");
-  ctx.fillStyle = glow;
-  ctx.fillRect(0, 0, W, H);
-
-  ctx.strokeStyle = "rgba(236, 246, 242, 0.06)";
-  ctx.lineWidth = 2;
-  for (let y = 0; y < 8; y++)
-    for (let x = 0; x < 5; x++) drawGirihStar(ctx, 120 + x * 210, 120 + y * 240, 46);
-
-  // سربرگ برند
-  ctx.textAlign = "center";
-  ctx.fillStyle = "#35d5bd";
-  ctx.font = "700 58px Lalezar, Vazirmatn, sans-serif";
-  ctx.fillText("ایران‌تیفای", W / 2, 170);
-  ctx.fillStyle = "rgba(236, 246, 242, 0.55)";
-  ctx.font = "500 30px 'JetBrains Mono', monospace";
-  ctx.fillText("IRANTIFY · STORY", W / 2, 222);
-
-  // عنوان اثر
-  ctx.fillStyle = "#ecf6f2";
-  ctx.font = "400 128px Lalezar, Vazirmatn, sans-serif";
-  const lines = wrapTitle(ctx, track.title, W - 180);
-  const lineH = 150;
-  const startY = 880 - ((lines.length - 1) * lineH) / 2;
-  lines.forEach((ln, i) => ctx.fillText(ln, W / 2, startY + i * lineH));
-
-  const artist = artistById(track.artistId)?.name ?? "شما";
-  ctx.fillStyle = `hsl(${h} 70% 70%)`;
-  ctx.font = "600 56px Vazirmatn, sans-serif";
-  ctx.fillText(artist, W / 2, startY + lines.length * lineH + 40);
-
-  // برچسب‌ها
-  const chips = [track.genre, track.dastgah !== "—" ? track.dastgah : null, `۱۰۸۰×۱۹۲۰`].filter(Boolean) as string[];
-  const chipY = startY + lines.length * lineH + 150;
-  ctx.font = "600 38px Vazirmatn, sans-serif";
-  const widths = chips.map((ch) => ctx.measureText(ch).width + 70);
-  const totalW = widths.reduce((s, w) => s + w, 0) + 24 * (chips.length - 1);
-  let cx = W / 2 - totalW / 2;
-  ctx.textAlign = "left";
-  chips.forEach((ch, i) => {
-    const w = widths[i];
-    ctx.fillStyle = "rgba(236, 246, 242, 0.08)";
-    ctx.beginPath();
-    ctx.roundRect(cx, chipY - 52, w, 76, 38);
-    ctx.fill();
-    ctx.strokeStyle = `hsla(${h} 70% 60% / 0.6)`;
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.fillStyle = "#ecf6f2";
-    ctx.fillText(ch, cx + 35, chipY + 2);
-    cx += w + 24;
-  });
-
-  // نوارهای صوتی از قلّه‌های واقعی اثر
-  const bars = 56;
-  const bw = (W - 200) / bars;
-  const peaks = track.peaks ?? [];
-  for (let i = 0; i < bars; i++) {
-    const v = peaks[Math.floor((i / bars) * peaks.length)] ?? 0.2;
-    const bh = 24 + v * 260;
-    ctx.fillStyle = `hsla(${h + (i / bars) * 40} 85% 60% / ${0.35 + v * 0.6})`;
-    ctx.fillRect(100 + i * bw + 2, 1620 - bh / 2, bw - 5, bh);
-  }
-
-  ctx.textAlign = "center";
-  ctx.fillStyle = "rgba(236, 246, 242, 0.7)";
-  ctx.font = "500 36px Vazirmatn, sans-serif";
-  ctx.fillText("این اثر را در ایران‌تیفای گوش کن ♪", W / 2, 1830);
-
-  return new Promise((resolve, reject) => {
-    c.toBlob((b) => (b ? resolve(b) : reject(new Error("blob"))), "image/png");
-  });
-}
-
-export default function StoryViewer({ items, index, playing, analyser, onNavigate, onClose, onTogglePlay, onHold, onShare }: Props) {
+export default function StoryViewer(p: Props) {
+  const { stories, index } = p;
+  const { lang } = useT();
+  const story = stories[index];
   const [progress, setProgress] = useState(0);
-  const [sharing, setSharing] = useState(false);
   const [held, setHeld] = useState(false);
-  const live = useRef({ playing, index, count: items.length });
-  live.current = { playing, index, count: items.length };
+  const [sheet, setSheet] = useState<"none" | "comment" | "share">("none");
+  const [commentText, setCommentText] = useState("");
+  const rafRef = useRef(0);
+  const lastRef = useRef(performance.now());
 
-  useEffect(() => setProgress(0), [index]);
+  const theme = story ? themeById(story.theme) : null;
+  const track = story ? p.tracks.find((tr) => tr.id === story.trackId) : null;
+  const liked = story ? story.likes.includes(p.user?.id ?? "") : false;
+  const saved = story ? p.savedIds.includes(story.id) : false;
+  const isCurrent = story ? p.playingId === story.trackId : false;
 
+  /* پیشرفت خودکار */
   useEffect(() => {
-    let raf = 0;
-    let last = performance.now();
+    setProgress(0);
+    lastRef.current = performance.now();
     const loop = (now: number) => {
-      raf = requestAnimationFrame(loop);
-      const dt = (now - last) / 1000;
-      last = now;
-      if (!live.current.playing || held) return;
-      setProgress((p) => {
-        const next = p + dt / STORY_SECONDS;
-        if (next >= 1) {
-          const i = live.current.index;
-          if (i < live.current.count - 1) onNavigate(i + 1);
-          else onClose();
+      rafRef.current = requestAnimationFrame(loop);
+      if (held || sheet !== "none") {
+        lastRef.current = now;
+        return;
+      }
+      const dt = now - lastRef.current;
+      lastRef.current = now;
+      setProgress((pr) => {
+        const nx = pr + dt / STORY_MS;
+        if (nx >= 1) {
+          if (index < stories.length - 1) p.onNavigate(index + 1);
+          else p.onClose();
           return 0;
         }
-        return next;
+        return nx;
       });
     };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [held, onNavigate, onClose]);
+    rafRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(rafRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [index, held, sheet, stories.length]);
 
-  const track = items[index];
-  if (!track) return null;
-  const artist = artistById(track.artistId);
-  const h = track.hue;
+  const requireAuth = useCallback(
+    (fn: () => void) => {
+      if (!p.user) {
+        p.onRequireAuth();
+        return;
+      }
+      fn();
+    },
+    [p]
+  );
 
-  const doShare = async () => {
-    setSharing(true);
-    try {
-      await onShare(track);
-    } finally {
-      setSharing(false);
-    }
+  const submitComment = () => {
+    const txt = commentText.trim();
+    if (!txt || !story) return;
+    requireAuth(() => {
+      p.onComment(story.id, txt);
+      setCommentText("");
+      setSheet("none");
+    });
   };
 
+  /* ---------- ساخت کارت استوری ---------- */
+  const buildCard = useCallback(async (): Promise<Blob> => {
+    const W = 1080;
+    const H = 1920;
+    const cv = document.createElement("canvas");
+    cv.width = W;
+    cv.height = H;
+    const c = cv.getContext("2d")!;
+    const th = themeById(story!.theme);
+    const grd = c.createLinearGradient(0, 0, W * 0.4, H);
+    const stops = th.css.match(/#[0-9a-fA-F]{6}/g) ?? ["#123a3f", "#35d5bd"];
+    stops.forEach((s, i) => grd.addColorStop(i / (stops.length - 1), s));
+    c.fillStyle = grd;
+    c.fillRect(0, 0, W, H);
+    // نویز ملایم
+    c.globalAlpha = 0.05;
+    for (let i = 0; i < 1200; i++) {
+      c.fillStyle = Math.random() > 0.5 ? "#fff" : "#000";
+      c.fillRect(Math.random() * W, Math.random() * H, 2, 2);
+    }
+    c.globalAlpha = 1;
+    // اکولایزر تزئینی
+    const bars = 48;
+    for (let i = 0; i < bars; i++) {
+      const h = 60 + Math.random() * 420;
+      c.fillStyle = "rgba(255,255,255,0.28)";
+      const bw = W / bars;
+      c.fillRect(i * bw + bw * 0.2, H * 0.62 - h, bw * 0.6, h);
+      c.globalAlpha = 0.35;
+      c.fillRect(i * bw + bw * 0.2, H * 0.62 + 12, bw * 0.6, h * 0.28);
+      c.globalAlpha = 1;
+    }
+    c.fillStyle = "rgba(0,0,0,0.28)";
+    c.fillRect(0, 0, W, H * 0.34);
+    c.textAlign = "center";
+    c.fillStyle = th.accent;
+    c.font = "700 42px sans-serif";
+    c.fillText(story!.userIsArtist ? "🎵 ARTIST STORY" : "🎵 STORY", W / 2, 140);
+    c.font = "900 120px sans-serif";
+    c.fillText(story!.userAvatar.length <= 4 ? story!.userAvatar : "🎧", W / 2, H * 0.42);
+    c.fillStyle = "#ffffff";
+    c.font = "800 88px sans-serif";
+    wrapText(c, track?.title ?? story!.trackId, W / 2, H * 0.5, W - 160, 100);
+    if (story!.caption) {
+      c.font = "500 44px sans-serif";
+      c.fillStyle = "rgba(255,255,255,0.9)";
+      wrapText(c, story!.caption, W / 2, H * 0.78, W - 200, 58);
+    }
+    c.fillStyle = th.accent;
+    c.font = "700 40px sans-serif";
+    c.fillText("IRANTIFY · ایران‌تیفای", W / 2, H - 120);
+    return new Promise((res) => cv.toBlob((b) => res(b!), "image/png"));
+  }, [story, track]);
+
+  const shareText = `${track?.title ?? ""} — ${story?.userName} | Irantify`;
+  const shareUrl = `https://irantify.app/s/${story?.id}`;
+
+  const doShare = async (target: string) => {
+    if (target === "copy") {
+      try {
+        await navigator.clipboard.writeText(`${shareText}\n${shareUrl}`);
+        p.onToast(t("copyLink") + " ✓");
+      } catch {
+        p.onToast(shareUrl);
+      }
+      setSheet("none");
+      return;
+    }
+    if (target === "download") {
+      const blob = await buildCard();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `irantify-story-${story?.id}.png`;
+      a.click();
+      p.onToast(t("shareDone"));
+      setSheet("none");
+      return;
+    }
+    const enc = encodeURIComponent(`${shareText}\n${shareUrl}`);
+    const urls: Record<string, string> = {
+      whatsapp: `https://wa.me/?text=${enc}`,
+      telegram: `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(shareText)}`,
+      twitter: `https://twitter.com/intent/tweet?text=${enc}`,
+    };
+    if (target === "native" && navigator.share) {
+      try {
+        await navigator.share({ title: shareText, text: shareText, url: shareUrl });
+      } catch {
+        /* cancelled */
+      }
+      setSheet("none");
+      return;
+    }
+    if (urls[target]) window.open(urls[target], "_blank", "noopener");
+    setSheet("none");
+  };
+
+  if (!story || !theme) return null;
+
   return (
-    <div className="fixed inset-0 z-60 flex items-center justify-center bg-night-950/85 p-4 backdrop-blur-md" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-night-950">
       <div
-        className="animate-pop relative h-[min(88dvh,720px)] w-[min(94vw,400px)] overflow-hidden rounded-[26px] border border-foam/12 shadow-2xl shadow-black/70"
-        style={{ background: `linear-gradient(165deg, hsl(${h} 40% 16%), hsl(${h} 48% 7%) 60%, #070f0e)` }}
-        onClick={(e) => e.stopPropagation()}
+        className="relative h-full w-full max-w-md overflow-hidden select-none"
+        style={{ background: theme.css }}
+        onPointerDown={() => setHeld(true)}
+        onPointerUp={() => setHeld(false)}
+        onPointerLeave={() => setHeld(false)}
       >
-        <div className="girih pointer-events-none absolute inset-0 opacity-60" />
-        <div className="absolute inset-0 opacity-80">
-          <Visualizer analyser={analyser} mode="orbit" playing={playing && !held} hue={h} />
-        </div>
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-night-950/70 via-transparent to-night-950/85" />
+        {/* بصری‌ساز پس‌زمینه */}
+        <BgEqualizer hue={track?.hue ?? 174} active={isCurrent && p.isPlaying && !held} />
 
         {/* نوارهای پیشرفت */}
-        <div className="absolute inset-x-4 top-4 z-20 flex gap-1.5">
-          {items.map((it, i) => (
-            <div key={it.id} className="h-1 flex-1 overflow-hidden rounded-full bg-foam/25">
+        <div className="absolute inset-x-3 top-3 z-20 flex gap-1.5">
+          {stories.map((s, i) => (
+            <div key={s.id} className="h-1 flex-1 overflow-hidden rounded-full bg-black/30">
               <div
-                className="h-full rounded-full bg-foam"
-                style={{ width: i < index ? "100%" : i === index ? `${progress * 100}%` : "0%", transition: "width 0.1s linear" }}
+                className="h-full rounded-full bg-white/95"
+                style={{ width: i < index ? "100%" : i === index ? `${progress * 100}%` : "0%" }}
               />
             </div>
           ))}
         </div>
 
         {/* سربرگ */}
-        <div className="absolute inset-x-4 top-8 z-20 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-turq">
-            <Logo size={22} />
-            <span className="font-display text-lg leading-none text-foam">ایران‌تیفای</span>
-            <span className="mr-1 rounded-full bg-foam/10 px-2 py-0.5 font-mono text-[9px] tracking-widest text-mist">STORY</span>
+        <div className="absolute inset-x-0 top-8 z-20 flex items-center gap-3 px-4">
+          <span className="flex h-11 w-11 items-center justify-center rounded-full border-2 border-white/60 bg-black/20 text-xl backdrop-blur-sm">
+            {story.userAvatar.startsWith("data:") ? (
+              <img src={story.userAvatar} alt="" className="h-full w-full rounded-full object-cover" />
+            ) : (
+              story.userAvatar
+            )}
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="flex items-center gap-1.5 text-sm font-extrabold text-white drop-shadow">
+              {story.userName}
+              {story.userIsArtist && (
+                <span className="rounded-full bg-white/20 px-2 py-0.5 text-[9px] font-bold backdrop-blur-sm">{t("artistBadge")}</span>
+              )}
+            </p>
+            <p className="font-mono text-[10px] text-white/70">
+              {timeAgo(story.ts, lang)} · {story.isVideo ? t("video") : t("audioBadge")}
+            </p>
           </div>
-          <button
-            onClick={onClose}
-            aria-label="بستن استوری"
-            className="rounded-full bg-night-950/50 p-2 text-foam transition-transform duration-200 hover:rotate-90 hover:bg-coral/25 hover:text-coral"
-          >
-            <IconX size={16} />
+          <button onClick={p.onClose} className="rounded-full bg-black/25 p-2 text-white backdrop-blur-sm transition-transform active:scale-90">
+            <IconX size={18} />
           </button>
         </div>
 
-        {/* ناحیه‌های ضربه: قبلی / بعدی */}
-        <button aria-label="استوری قبلی" className="absolute inset-y-0 right-0 z-10 w-1/3" onClick={() => index > 0 && onNavigate(index - 1)} />
-        <button
-          aria-label="استوری بعدی"
-          className="absolute inset-y-0 left-0 z-10 w-1/3"
-          onClick={() => (index < items.length - 1 ? onNavigate(index + 1) : onClose())}
-        />
-        {/* نگه‌داشتن = توقف */}
-        <button
-          aria-label="نگه‌داشتن استوری"
-          className="absolute inset-y-0 left-1/3 z-10 w-1/3 cursor-grab active:cursor-grabbing"
-          onPointerDown={() => {
-            setHeld(true);
-            onHold(true);
-          }}
-          onPointerUp={() => {
-            setHeld(false);
-            onHold(false);
-          }}
-          onPointerLeave={() => {
-            if (held) {
-              setHeld(false);
-              onHold(false);
-            }
-          }}
-          onContextMenu={(e) => e.preventDefault()}
-        />
-
-        {/* محتوای کارت */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col gap-4 p-6">
-          <div className="flex items-center gap-3">
-            <span
-              className="relative flex h-12 w-12 items-center justify-center rounded-full font-display text-xl text-night-950"
-              style={{ background: `linear-gradient(135deg, hsl(${h} 85% 62%), hsl(${h + 40} 80% 55%))` }}
-            >
-              {(artist?.name ?? "شما").slice(0, 1)}
-              <span className="absolute -inset-1 rounded-full border border-dashed border-foam/40 motion-safe:animate-spin-slow" />
+        {/* مرکز: اطلاعات اثر */}
+        <div className="absolute inset-x-0 bottom-40 z-20 px-6 text-center">
+          {story.isVideo && (
+            <span className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-black/30 px-3 py-1 text-[10px] font-bold text-white backdrop-blur-sm">
+              <IconVideo size={12} /> {t("videoNow")}
             </span>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-bold text-foam">{artist?.name ?? "شما"}</p>
-              <p className="font-mono text-[10px] tracking-wide text-mist">
-                {track.genre} {track.dastgah !== "—" ? `· ${track.dastgah}` : ""} · {faNum(track.year)}
-              </p>
-            </div>
-            {held && (
-              <span className="mr-auto rounded-full bg-night-950/70 px-2.5 py-1 font-mono text-[10px] text-saffron">متوقف شد</span>
-            )}
-          </div>
-
-          <div>
-            <h2 className="font-display text-4xl leading-tight text-foam drop-shadow-lg">{track.title}</h2>
-            <p className="mt-1 text-xs text-mist">
-              آلبوم «{track.album}» · {faNum(track.plays ? Math.round(track.plays / 1000) : 0)} هزار پخش
-            </p>
-          </div>
-
-          <div className="pointer-events-auto flex items-center gap-2.5">
-            <button
-              onClick={onTogglePlay}
-              className="flex items-center gap-2 rounded-full bg-foam px-5 py-2.5 text-sm font-extrabold text-night-900 shadow-lg shadow-black/40 transition-all duration-200 hover:scale-105 hover:bg-turq active:scale-95"
-            >
-              {playing ? <IconPause size={16} /> : <IconPlay size={16} />}
-              {playing ? "توقف" : "پخش"}
-            </button>
-            <button
-              onClick={doShare}
-              disabled={sharing}
-              className="flex items-center gap-2 rounded-full border border-turq/50 bg-night-950/50 px-5 py-2.5 text-sm font-bold text-turq backdrop-blur transition-all duration-200 hover:scale-105 hover:bg-turq hover:text-night-950 active:scale-95 disabled:opacity-50"
-            >
-              {sharing ? (
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-turq border-t-transparent" />
-              ) : (
-                <IconShare size={16} />
-              )}
-              {sharing ? "در حال ساخت…" : "اشتراک‌گذاری استوری"}
-            </button>
-            <button
-              onClick={doShare}
-              aria-label="دانلود کارت استوری"
-              title="دانلود PNG"
-              className="rounded-full border border-foam/15 bg-night-950/50 p-2.5 text-mist backdrop-blur transition-all duration-200 hover:border-saffron/60 hover:text-saffron active:scale-90"
-            >
-              <IconDownload size={16} />
-            </button>
-          </div>
-          <p className="text-center font-mono text-[9.5px] tracking-wide text-dim">
-            ضربهٔ چپ/راست برای جابه‌جایی · نگه‌داشتن برای توقف
-          </p>
+          )}
+          <h2 className="font-display text-3xl leading-snug text-white drop-shadow-lg">{track?.title ?? "—"}</h2>
+          {story.caption && <p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-white/90">{story.caption}</p>}
+          <button
+            onClick={() => p.onPlayTrack(story.trackId)}
+            className="mx-auto mt-4 flex items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-extrabold text-night-950 shadow-xl transition-all active:scale-95"
+          >
+            {isCurrent && p.isPlaying ? <IconPause size={16} /> : <IconPlay size={16} />}
+            {isCurrent && p.isPlaying ? t("pause") : t("play")}
+          </button>
         </div>
+
+        {/* اکشن‌بار */}
+        <div className="absolute inset-x-0 bottom-0 z-20 flex items-center gap-2 bg-gradient-to-t from-black/60 to-transparent px-4 pb-8 pt-10">
+          <input
+            value={commentText}
+            onChange={(e) => setCommentText(e.target.value)}
+            onFocus={() => setSheet("comment")}
+            placeholder={p.user ? t("writeComment") : t("commentLogin")}
+            readOnly={!p.user}
+            className="h-11 min-w-0 flex-1 rounded-full border border-white/25 bg-black/25 px-4 text-sm text-white outline-none backdrop-blur-sm placeholder:text-white/60 focus:border-white/60"
+          />
+          <button onClick={() => requireAuth(() => p.onLike(story.id))} className="transition-transform active:scale-90">
+            <IconHeart size={26} filled={liked} className={liked ? "text-[#ff5c7a]" : "text-white"} />
+          </button>
+          <button onClick={() => setSheet("comment")} className="transition-transform active:scale-90">
+            <IconComment size={25} className="text-white" />
+          </button>
+          <button onClick={() => requireAuth(() => p.onSave(story.id))} className="transition-transform active:scale-90">
+            <IconBookmark size={24} filled={saved} className={saved ? "text-saffron" : "text-white"} />
+          </button>
+          <button onClick={() => setSheet("share")} className="transition-transform active:scale-90">
+            <IconShare size={24} className="text-white" />
+          </button>
+        </div>
+
+        {/* شمارندهٔ لایک/کامنت */}
+        <div className="absolute bottom-24 z-20 flex w-full items-center justify-center gap-4 text-[11px] font-bold text-white/90">
+          <span className="flex items-center gap-1">
+            <IconHeart size={13} filled className="text-[#ff5c7a]" /> {num(story.likes.length)} {t("likesWord")}
+          </span>
+          <span className="flex items-center gap-1">
+            <IconComment size={13} /> {num(story.comments.length)}
+          </span>
+        </div>
+
+        {/* ناحیهٔ ناوبری */}
+        <button aria-label="prev" onClick={() => index > 0 && p.onNavigate(index - 1)} className="absolute inset-y-0 start-0 z-10 w-1/3" />
+        <button aria-label="next" onClick={() => (index < stories.length - 1 ? p.onNavigate(index + 1) : p.onClose())} className="absolute inset-y-0 end-0 z-10 w-1/3" />
       </div>
+
+      {/* شیت کامنت‌ها */}
+      {sheet === "comment" && (
+        <div className="absolute inset-x-0 bottom-0 z-30 mx-auto max-w-md">
+          <div className="animate-rise rounded-t-3xl border-t border-foam/10 bg-night-900/98 p-4 shadow-2xl backdrop-blur-xl" dir={lang === "fa" ? "rtl" : "ltr"}>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-extrabold text-foam">{t("comments")} · {num(story.comments.length)}</h3>
+              <button onClick={() => setSheet("none")} className="text-mist"><IconX size={16} /></button>
+            </div>
+            <div className="slim-scroll max-h-56 space-y-3 overflow-y-auto">
+              {story.comments.length === 0 && <p className="py-4 text-center text-xs text-dim">{t("noComments")}</p>}
+              {story.comments.map((cm) => (
+                <div key={cm.id} className="flex items-start gap-2.5">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-night-700 text-sm">{cm.avatar}</span>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-foam">{cm.name}</p>
+                    <p className="text-xs leading-5 text-mist">{cm.text}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 flex items-center gap-2">
+              <input
+                value={commentText}
+                onChange={(e) => setCommentText(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && submitComment()}
+                placeholder={t("yourComment")}
+                className="h-10 flex-1 rounded-full border border-foam/12 bg-night-850 px-4 text-xs text-foam outline-none focus:border-turq"
+              />
+              <button onClick={submitComment} className="flex h-10 w-10 items-center justify-center rounded-full bg-turq text-night-950 transition-transform active:scale-90">
+                <IconSend size={16} />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* شیت اشتراک */}
+      {sheet === "share" && (
+        <div className="absolute inset-x-0 bottom-0 z-30 mx-auto max-w-md" dir={lang === "fa" ? "rtl" : "ltr"}>
+          <div className="animate-rise rounded-t-3xl border-t border-foam/10 bg-night-900/98 p-5 shadow-2xl backdrop-blur-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-sm font-extrabold text-foam">{t("shareTo")}</h3>
+              <button onClick={() => setSheet("none")} className="text-mist"><IconX size={16} /></button>
+            </div>
+            <div className="grid grid-cols-4 gap-3">
+              <ShareBtn emoji="💬" label={t("whatsapp")} onClick={() => doShare("whatsapp")} />
+              <ShareBtn emoji="✈️" label={t("telegram")} onClick={() => doShare("telegram")} />
+              <ShareBtn emoji="📷" label={t("instagram")} onClick={() => doShare("download")} />
+              <ShareBtn emoji="🐦" label={t("twitter")} onClick={() => doShare("twitter")} />
+              <ShareBtn emoji="🔗" label={t("copyLink")} onClick={() => doShare("copy")} />
+              <ShareBtn emoji="⬇️" label={t("downloadCard")} onClick={() => doShare("download")} />
+              <ShareBtn emoji="📤" label={t("share")} onClick={() => doShare("native")} />
+              <ShareBtn emoji="🎵" label={t("listenOnApp")} onClick={() => { p.onPlayTrack(story.trackId); setSheet("none"); }} />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-export { exportStoryCard };
+function ShareBtn({ emoji, label, onClick }: { emoji: string; label: string; onClick: () => void }) {
+  return (
+    <button onClick={onClick} className="flex flex-col items-center gap-1.5 rounded-2xl border border-foam/8 bg-night-850 py-3 transition-all duration-150 hover:border-turq/40 active:scale-90">
+      <span className="text-2xl">{emoji}</span>
+      <span className="text-[10px] font-bold text-mist">{label}</span>
+    </button>
+  );
+}
+
+function wrapText(c: CanvasRenderingContext2D, text: string, x: number, y: number, maxW: number, lh: number) {
+  const words = text.split(" ");
+  let line = "";
+  let yy = y;
+  for (const w of words) {
+    const test = line + w + " ";
+    if (c.measureText(test).width > maxW && line) {
+      c.fillText(line.trim(), x, yy);
+      line = w + " ";
+      yy += lh;
+    } else line = test;
+  }
+  c.fillText(line.trim(), x, yy);
+}
+
+function timeAgo(ts: number, lang: string): string {
+  const m = Math.floor((Date.now() - ts) / 60000);
+  if (m < 1) return lang === "fa" ? "همین حالا" : "just now";
+  if (m < 60) return lang === "fa" ? `${num(m)} دقیقه پیش` : `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return lang === "fa" ? `${num(h)} ساعت پیش` : `${h}h ago`;
+  return lang === "fa" ? `${num(Math.floor(h / 24))} روز پیش` : `${Math.floor(h / 24)}d ago`;
+}
+
+/** اکولایزر متحرک پس‌زمینهٔ استوری */
+function BgEqualizer({ hue, active }: { hue: number; active: boolean }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const cv = ref.current;
+    if (!cv) return;
+    const c = cv.getContext("2d")!;
+    let raf = 0;
+    const resize = () => {
+      cv.width = cv.clientWidth * 2;
+      cv.height = cv.clientHeight * 2;
+    };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(cv);
+    const N = 40;
+    const levels = new Array(N).fill(0.2);
+    const draw = (now: number) => {
+      raf = requestAnimationFrame(draw);
+      const W = cv.width;
+      const H = cv.height;
+      c.clearRect(0, 0, W, H);
+      const bw = W / N;
+      for (let i = 0; i < N; i++) {
+        const target = active ? 0.15 + 0.75 * Math.abs(Math.sin(i * 0.7 + now * 0.004)) * Math.abs(Math.sin(now * 0.0013 + i)) : 0.08 + 0.05 * Math.sin(i + now * 0.001);
+        levels[i] += (target - levels[i]) * 0.12;
+        const h = levels[i] * H * 0.42;
+        c.fillStyle = `hsla(${hue + (i / N) * 40}, 85%, 65%, 0.5)`;
+        c.fillRect(i * bw + bw * 0.22, H * 0.72 - h, bw * 0.56, h);
+        c.globalAlpha = 0.4;
+        c.fillRect(i * bw + bw * 0.22, H * 0.72 + 8, bw * 0.56, h * 0.3);
+        c.globalAlpha = 1;
+      }
+    };
+    raf = requestAnimationFrame(draw);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
+  }, [hue, active]);
+  return <canvas ref={ref} className="absolute inset-0 h-full w-full opacity-70" />;
+}
+
+export { uid as _storyUid };

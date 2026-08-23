@@ -204,3 +204,138 @@ export const Logo = (p: P) => {
     </svg>
   );
 };
+
+export const IconBack = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M14.5 5.5 8 12l6.5 6.5" />
+  </svg>
+);
+
+export const IconComment = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M20 11.5a7.5 7.5 0 0 1-11 6.6L4 19.5l1.5-4.6A7.5 7.5 0 1 1 20 11.5Z" />
+  </svg>
+);
+
+export const IconBookmark = ({ filled, ...p }: P & { filled?: boolean }) => (
+  <svg {...base(p)}>
+    <path d="M6.5 4h11v16L12 15.8 6.5 20V4Z" fill={filled ? "currentColor" : "none"} />
+  </svg>
+);
+
+export const IconGear = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="3" />
+    <path d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4 18 18M18 6l-1.6 1.6M7.6 16.4 6 18" />
+  </svg>
+);
+
+export const IconGlobe = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M3.5 12h17M12 3.5c2.6 2.4 3.8 5.3 3.8 8.5s-1.2 6.1-3.8 8.5c-2.6-2.4-3.8-5.3-3.8-8.5s1.2-6.1 3.8-8.5Z" />
+  </svg>
+);
+
+export const IconCheck = (p: P) => (
+  <svg {...base(p)}>
+    <path d="m5 12.5 4.5 4.5L19 7" />
+  </svg>
+);
+
+export const IconVideo = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="3.5" y="6" width="13" height="12" rx="2" />
+    <path d="m16.5 10.5 4-2.5v8l-4-2.5" />
+  </svg>
+);
+
+export const IconMic = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="9.5" y="3.5" width="5" height="10" rx="2.5" />
+    <path d="M6 11.5a6 6 0 0 0 12 0M12 17.5V21" />
+  </svg>
+);
+
+export const IconCar = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M5 12 6.5 7.5h11L19 12" />
+    <path d="M4 12h16v5h-2.5v1.5h-3V17h-5v1.5h-3V17H4v-5Z" />
+    <path d="M6.5 14.5h2M15.5 14.5h2" />
+  </svg>
+);
+
+export const IconSliders = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M6 4v6M6 14v6M12 4v2M12 10v10M18 4v10M18 18v2" />
+    <circle cx="6" cy="12" r="1.8" />
+    <circle cx="12" cy="8" r="1.8" />
+    <circle cx="18" cy="16" r="1.8" />
+  </svg>
+);
+
+export const IconMore = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
+    <circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none" />
+  </svg>
+);
+
+export const IconSend = (p: P) => (
+  <svg {...base(p)}>
+    <path d="m4 11 16-7-5 16-3.5-6L4 11Z" />
+    <path d="m11.5 14 8.5-10" />
+  </svg>
+);
+
+export const IconUser = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="8" r="3.6" />
+    <path d="M4.5 20a7.5 7.5 0 0 1 15 0" />
+  </svg>
+);
+
+export const IconMusic = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M9 18V6.5L19 4.5V16" />
+    <circle cx="6.5" cy="18" r="2.4" />
+    <circle cx="16.5" cy="16" r="2.4" />
+  </svg>
+);
+
+export const IconExternal = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M10 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-4" />
+    <path d="M14 4h6v6M20 4l-9 9" />
+  </svg>
+);
+
+export const IconChev = (p: P) => (
+  <svg {...base(p)}>
+    <path d="m9.5 5.5 6.5 6.5-6.5 6.5" />
+  </svg>
+);
+
+export const IconStar = ({ filled, ...p }: P & { filled?: boolean }) => (
+  <svg {...base(p)}>
+    <path
+      d="m12 3.8 2.5 5.2 5.7.7-4.2 3.9 1.1 5.6L12 16.4l-5.1 2.8 1.1-5.6L3.8 9.7l5.7-.7L12 3.8Z"
+      fill={filled ? "currentColor" : "none"}
+    />
+  </svg>
+);
+
+export const IconEq = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M4 20V9M8.5 20V4M13 20v-8M17.5 20V7M22 20v-5" strokeWidth={2.2} />
+  </svg>
+);
+
+export const IconLogout = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M14 4H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7" />
+    <path d="m17 8 4 4-4 4M21 12H10" />
+  </svg>
+);
+
