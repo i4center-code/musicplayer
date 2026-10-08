@@ -1,57 +1,67 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import PlayerBar from "./components/PlayerBar";
-import StoryViewer, { exportStoryCard } from "./components/StoryViewer";
-import Visualizer from "./components/Visualizer";
+import AuthScreen from "./components/AuthScreen";
+import BottomNav, { type Tab } from "./components/BottomNav";
+import CreateStory from "./components/CreateStory";
+import EqualizerScreen from "./components/EqualizerScreen";
+import LibraryScreen, { ArtistStudio } from "./components/LibraryScreen";
+import MobilePlayer from "./components/MobilePlayer";
+import StoryViewer from "./components/StoryViewer";
+import { ArtistLanding, ArtistsScreen, HomeScreen, MoodScreen } from "./components/screens";
+import { num, t, useT } from "./lib/i18n";
+import type { CarConfig, Story, User } from "./lib/state";
 import {
-  IconArtists,
-  IconHeart,
-  IconHome,
-  IconSearch,
-  IconUpload,
-  Logo,
-} from "./components/icons";
-import { ArtistView, ArtistsView, HomeView, LikedView, SearchView } from "./components/views";
+  loadSaved,
+  loadStories,
+  loadUser,
+  optimizeCarGains,
+  saveSaved,
+  saveStories,
+  saveUser,
+  uid,
+} from "./lib/state";
+import type { TrackRuntime } from "./lib/catalog";
+import { TRACKS, toSpec, tracksOfArtist } from "./lib/catalog";
 import { decodeFile, extractPeaks, type VizMode } from "./lib/audio";
-import { TRACKS, artistById, faNum, toSpec, type Artist, type TrackRuntime } from "./lib/catalog";
+import { presetById } from "./lib/state";
 import { renderTrack } from "./lib/synth";
 
-type View =
-  | { name: "home" }
-  | { name: "search" }
-  | { name: "artists" }
-  | { name: "artist"; id: string }
-  | { name: "liked" };
-
-interface Toast {
-  id: number;
-  msg: string;
-  kind: "ok" | "err";
-}
-
+const REAL_FREQS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 const LS_LIKED = "irantify_liked";
-const LS_VOL = "irantify_vol";
 const LS_LAST = "irantify_last";
+const LS_GAINS = "irantify_gains";
+const LS_PRESET = "irantify_preset";
+const LS_CAR = "irantify_car";
+const LS_SAVEDCARS = "irantify_savedcars";
 
-const toRuntime = (t: (typeof TRACKS)[number]): TrackRuntime => ({ ...t, ready: false });
+const toRuntime = (tr: (typeof TRACKS)[number]): TrackRuntime => ({ ...tr, ready: false });
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function shuffleArr<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
+interface UploadState {
+  name: string;
+  step: number; // 0..2
+  pct: number;
+  done: number;
+  total: number;
 }
 
 export default function App() {
-  /* ---------- داده و پخش ---------- */
+  const { lang } = useT();
+
+  /* ---------- کاربر ---------- */
+  const [user, setUser] = useState<User | null>(() => loadUser());
+  const [authOpen, setAuthOpen] = useState(false);
+
+  /* ---------- ناوبری ---------- */
+  const [tab, setTab] = useState<Tab>("home");
+  const [landing, setLanding] = useState<string | "me" | null>(null);
+  const [eqOpen, setEqOpen] = useState(false);
+  const [studioOpen, setStudioOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createTrackId, setCreateTrackId] = useState<string | null>(null);
+  const [storyIndex, setStoryIndex] = useState<number | null>(null);
+
+  /* ---------- داده ---------- */
   const [tracks, setTracks] = useState<TrackRuntime[]>(() => TRACKS.map(toRuntime));
-  const [queue, setQueue] = useState<string[]>([]);
-  const [qIndex, setQIndex] = useState(0);
-  const [playing, setPlaying] = useState(false);
-  const [loadingId, setLoadingId] = useState<string | null>(null);
-  const [shuffle, setShuffle] = useState(false);
-  const [repeat, setRepeat] = useState<"off" | "all" | "one">("off");
   const [liked, setLiked] = useState<Set<string>>(() => {
     try {
       return new Set<string>(JSON.parse(localStorage.getItem(LS_LIKED) ?? "[]"));
@@ -59,130 +69,177 @@ export default function App() {
       return new Set();
     }
   });
-  const [volume, setVolume] = useState(() => {
-    const v = Number(localStorage.getItem(LS_VOL));
-    return Number.isFinite(v) && v > 0 ? v : 0.85;
+  const [savedIds, setSavedIds] = useState<string[]>(() => loadSaved());
+  const [stories, setStories] = useState<Story[]>(() => loadStories());
+  const [mood, setMood] = useState<string | null>(null);
+  const [place, setPlace] = useState<string | null>(null);
+  const [savedTab, setSavedTab] = useState<"files" | "likes" | "saved">("files");
+  const [upload, setUpload] = useState<UploadState | null>(null);
+
+  /* ---------- اکولایزر ---------- */
+  const [gains, setGainsState] = useState<number[]>(() => {
+    try {
+      const g = JSON.parse(localStorage.getItem(LS_GAINS) ?? "null");
+      if (Array.isArray(g) && g.length === 10) return g;
+    } catch { /* ignore */ }
+    return [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
   });
-  const [muted, setMuted] = useState(false);
+  const [presetId, setPresetId] = useState<string>(() => localStorage.getItem(LS_PRESET) ?? "flat");
+  const [car, setCar] = useState<CarConfig>(() => {
+    try {
+      const c = JSON.parse(localStorage.getItem(LS_CAR) ?? "null");
+      if (c) return c as CarConfig;
+    } catch { /* ignore */ }
+    return { headunit: "pioneer", hasSub: true, subLocation: "trunk", frontCount: 2, rearCount: 2, hasTweeter: false };
+  });
+  const [savedCars, setSavedCars] = useState<{ name: string; gains: number[]; car: CarConfig }[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(LS_SAVEDCARS) ?? "[]");
+    } catch {
+      return [];
+    }
+  });
+
+  /* ---------- پخش ---------- */
+  const [queue, setQueue] = useState<string[]>([]);
+  const [qIndex, setQIndex] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [shuffle, setShuffle] = useState(false);
+  const [repeat, setRepeat] = useState<"off" | "all" | "one">("off");
   const [vizMode, setVizMode] = useState<VizMode>("bars");
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
-
-  /* ---------- رابط ---------- */
-  const [view, setView] = useState<View>({ name: "home" });
-  const [showQueue, setShowQueue] = useState(false);
-  const [storyOpen, setStoryOpen] = useState(false);
-  const [toasts, setToasts] = useState<Toast[]>([]);
-  const [dragOver, setDragOver] = useState(false);
-  const [query, setQuery] = useState("");
-  const [genreFilter, setGenreFilter] = useState("همه");
+  const [toasts, setToasts] = useState<{ id: number; msg: string }[]>([]);
 
   const [audio] = useState(() => new Audio());
-  const graphRef = useRef<{ ctx: AudioContext; analyser: AnalyserNode } | null>(null);
+  const graphRef = useRef<{ ctx: AudioContext; filters: BiquadFilterNode[] } | null>(null);
+  const filtersRef = useRef<BiquadFilterNode[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
-  const contextRef = useRef<{ ids: string[] } | null>(null);
-  const dragDepth = useRef(0);
   const toastId = useRef(0);
 
   const currentId = queue[qIndex] ?? null;
-  const current = tracks.find((t) => t.id === currentId) ?? null;
-  const hue = current?.hue ?? 174;
-  const queueTracks = queue.map((id) => tracks.find((t) => t.id === id)).filter(Boolean) as TrackRuntime[];
+  const current = tracks.find((x) => x.id === currentId) ?? null;
 
   /* ---------- توست ---------- */
-  const toast = useCallback((msg: string, kind: Toast["kind"] = "ok") => {
+  const toast = useCallback((msg: string) => {
     const id = ++toastId.current;
-    setToasts((p) => [...p.slice(-2), { id, msg, kind }]);
-    window.setTimeout(() => setToasts((p) => p.filter((t) => t.id !== id)), 3400);
+    setToasts((p) => [...p.slice(-1), { id, msg }]);
+    window.setTimeout(() => setToasts((p) => p.filter((x) => x.id !== id)), 2600);
   }, []);
 
-  /* ---------- موتور صدا ---------- */
+  /* ---------- گراف صدا با اکولایزر ---------- */
   const ensureGraph = useCallback(() => {
     if (graphRef.current) return graphRef.current;
     const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     const ctx = new AC();
     const src = ctx.createMediaElementSource(audio);
+    const filters = REAL_FREQS.map((f, i) => {
+      const b = ctx.createBiquadFilter();
+      b.type = i === 0 ? "lowshelf" : i === REAL_FREQS.length - 1 ? "highshelf" : "peaking";
+      b.frequency.value = f;
+      b.Q.value = 1.2;
+      b.gain.value = 0;
+      return b;
+    });
     const an = ctx.createAnalyser();
     an.fftSize = 2048;
     an.smoothingTimeConstant = 0.82;
-    src.connect(an);
+    src.connect(filters[0]);
+    for (let i = 0; i < filters.length - 1; i++) filters[i].connect(filters[i + 1]);
+    filters[filters.length - 1].connect(an);
     an.connect(ctx.destination);
-    graphRef.current = { ctx, analyser: an };
+    filtersRef.current = filters;
+    graphRef.current = { ctx, filters };
     setAnalyser(an);
     return graphRef.current;
   }, [audio]);
 
-  const ensureReady = useCallback(
-    async (t: TrackRuntime): Promise<TrackRuntime> => {
-      if (t.ready && t.url) return t;
-      setLoadingId(t.id);
-      try {
-        const rendered = await renderTrack(t.id, toSpec(t));
-        const ready = { ...t, ready: true, url: rendered.url, peaks: rendered.peaks };
-        setTracks((prev) => prev.map((x) => (x.id === t.id ? ready : x)));
-        return ready;
-      } finally {
-        setLoadingId((cur) => (cur === t.id ? null : cur));
-      }
-    },
-    []
-  );
+  const applyGains = useCallback((g: number[]) => {
+    setGainsState(g);
+    localStorage.setItem(LS_GAINS, JSON.stringify(g));
+    filtersRef.current.forEach((f, i) => {
+      f.gain.value = g[i] ?? 0;
+    });
+  }, []);
+
+  useEffect(() => {
+    filtersRef.current.forEach((f, i) => {
+      f.gain.value = gains[i] ?? 0;
+    });
+  }, [gains]);
+
+  /* ---------- آماده‌سازی اثر ---------- */
+  const ensureReady = useCallback(async (tr: TrackRuntime): Promise<TrackRuntime> => {
+    if (tr.ready && tr.url) return tr;
+    setLoadingId(tr.id);
+    try {
+      const rendered = await renderTrack(tr.id, toSpec(tr));
+      const ready = { ...tr, ready: true, url: rendered.url, peaks: rendered.peaks };
+      setTracks((prev) => prev.map((x) => (x.id === tr.id ? ready : x)));
+      return ready;
+    } finally {
+      setLoadingId((c) => (c === tr.id ? null : c));
+    }
+  }, []);
 
   const startTrack = useCallback(
-    async (t: TrackRuntime) => {
+    async (tr: TrackRuntime) => {
       try {
-        const ready = await ensureReady(t);
+        const ready = await ensureReady(tr);
         ensureGraph();
         void graphRef.current?.ctx.resume();
         if (audio.src !== ready.url) audio.src = ready.url!;
         audio.currentTime = 0;
         await audio.play();
-        localStorage.setItem(LS_LAST, t.id);
+        localStorage.setItem(LS_LAST, tr.id);
       } catch {
-        toast("پخش ممکن نشد — دوباره تلاش کن", "err");
+        toast(lang === "fa" ? "پخش ممکن نشد" : "Playback failed");
       }
     },
-    [audio, ensureGraph, ensureReady, toast]
+    [audio, ensureGraph, ensureReady, toast, lang]
   );
 
-  const playContext = useCallback(
-    (ids: string[], startId: string) => {
-      if (!ids.length) return;
-      contextRef.current = { ids };
+  const playFromList = useCallback(
+    (list: TrackRuntime[], id: string) => {
+      if (!list.length) return;
+      let ids = list.map((x) => x.id);
+      let idx = ids.indexOf(id);
       if (shuffle) {
-        const rest = shuffleArr(ids.filter((i) => i !== startId));
-        setQueue([startId, ...rest]);
-        setQIndex(0);
-      } else {
-        setQueue(ids);
-        setQIndex(Math.max(0, ids.indexOf(startId)));
+        const rest = ids.filter((x) => x !== id).sort(() => Math.random() - 0.5);
+        ids = [id, ...rest];
+        idx = 0;
       }
-      const t = tracks.find((x) => x.id === startId);
-      if (t) void startTrack(t);
+      setQueue(ids);
+      setQIndex(Math.max(0, idx));
+      const tr = tracks.find((x) => x.id === id);
+      if (tr) void startTrack(tr);
     },
     [shuffle, tracks, startTrack]
   );
 
   const playTrack = useCallback(
-    (t: TrackRuntime) => {
-      if (t.id === currentId) {
+    (id: string) => {
+      const tr = tracks.find((x) => x.id === id);
+      if (!tr) return;
+      if (id === currentId) {
         togglePlayRef.current();
         return;
       }
-      const ids = t.uploaded
-        ? tracks.filter((x) => x.uploaded).map((x) => x.id)
-        : tracks.filter((x) => x.album === t.album && !x.uploaded).map((x) => x.id);
-      playContext(ids.length ? ids : [t.id], t.id);
+      const list = tr.uploaded ? tracks.filter((x) => x.uploaded) : tracks.filter((x) => x.album === tr.album && !x.uploaded);
+      playFromList(list.length ? list : [tr], id);
     },
-    [currentId, tracks, playContext]
+    [tracks, currentId, playFromList]
   );
+  const playTrackRef = useRef(playTrack);
+  playTrackRef.current = playTrack;
 
-  const selectQueueIndex = useCallback(
+  const selectIndex = useCallback(
     (i: number) => {
       const id = queue[i];
       if (!id) return;
       setQIndex(i);
-      const t = tracks.find((x) => x.id === id);
-      if (t) void startTrack(t);
+      const tr = tracks.find((x) => x.id === id);
+      if (tr) void startTrack(tr);
     },
     [queue, tracks, startTrack]
   );
@@ -190,14 +247,14 @@ export default function App() {
   const goNext = useCallback(
     (auto = false) => {
       if (!queue.length) return;
-      if (qIndex < queue.length - 1) selectQueueIndex(qIndex + 1);
-      else if (repeat === "all" || !auto) selectQueueIndex(0);
+      if (qIndex < queue.length - 1) selectIndex(qIndex + 1);
+      else if (repeat === "all" || !auto) selectIndex(0);
       else {
         audio.pause();
         setPlaying(false);
       }
     },
-    [queue, qIndex, repeat, selectQueueIndex, audio]
+    [queue, qIndex, repeat, selectIndex, audio]
   );
 
   const goPrev = useCallback(() => {
@@ -206,85 +263,80 @@ export default function App() {
       audio.currentTime = 0;
       return;
     }
-    selectQueueIndex(qIndex > 0 ? qIndex - 1 : queue.length - 1);
-  }, [queue, qIndex, audio, selectQueueIndex]);
+    selectIndex(qIndex > 0 ? qIndex - 1 : queue.length - 1);
+  }, [queue, qIndex, audio, selectIndex]);
 
   const togglePlay = useCallback(() => {
     if (!current) {
       const first = [...tracks].sort((a, b) => b.plays - a.plays)[0];
-      if (first) playTrack(first);
+      if (first) playTrackRef.current(first.id);
       return;
     }
     if (audio.paused) void startTrack(current);
     else audio.pause();
-  }, [current, tracks, audio, playTrack, startTrack]);
+  }, [current, tracks, audio, startTrack]);
   const togglePlayRef = useRef(togglePlay);
   togglePlayRef.current = togglePlay;
 
-  const handleEnded = useCallback(() => {
-    if (repeat === "one") {
-      audio.currentTime = 0;
-      void audio.play();
-      return;
-    }
-    goNext(true);
-  }, [repeat, audio, goNext]);
-
-  /* رویدادهای عنصر صوتی */
   useEffect(() => {
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
+    const onEnded = () => {
+      if (repeat === "one") {
+        audio.currentTime = 0;
+        void audio.play();
+        return;
+      }
+      goNext(true);
+    };
     audio.addEventListener("play", onPlay);
     audio.addEventListener("pause", onPause);
-    audio.addEventListener("ended", handleEnded);
+    audio.addEventListener("ended", onEnded);
     return () => {
       audio.removeEventListener("play", onPlay);
       audio.removeEventListener("pause", onPause);
-      audio.removeEventListener("ended", handleEnded);
+      audio.removeEventListener("ended", onEnded);
     };
-  }, [audio, handleEnded]);
+  }, [audio, repeat, goNext]);
 
-  useEffect(() => {
-    audio.volume = muted ? 0 : volume;
-    localStorage.setItem(LS_VOL, String(volume));
-  }, [audio, volume, muted]);
-
-  useEffect(() => {
-    localStorage.setItem(LS_LIKED, JSON.stringify([...liked]));
-  }, [liked]);
-
-  /* بازگردانی آخرین اثر */
+  /* بازیابی آخرین اثر */
   useEffect(() => {
     const last = localStorage.getItem(LS_LAST);
     if (!last) return;
-    const t = TRACKS.find((x) => x.id === last);
-    if (!t) return;
-    const ids = TRACKS.filter((x) => x.album === t.album).map((x) => x.id);
-    contextRef.current = { ids };
+    const tr = TRACKS.find((x) => x.id === last);
+    if (!tr) return;
+    const ids = TRACKS.filter((x) => x.album === tr.album).map((x) => x.id);
     setQueue(ids);
     setQIndex(Math.max(0, ids.indexOf(last)));
     void (async () => {
-      const rt = toRuntime(t);
-      const ready = await ensureReady({ ...rt });
+      const ready = await ensureReady(toRuntime(tr));
       audio.src = ready.url!;
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ---------- آپلود ---------- */
+  /* ---------- آپلود با پیشرفت ---------- */
   const ingest = useCallback(
     async (files: FileList | File[]) => {
-      const list = [...files].filter((f) => f.type.startsWith("audio") || /\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(f.name));
+      const list = [...files].filter((f) => f.type.startsWith("audio") || f.type.startsWith("video") || /\.(mp3|wav|ogg|m4a|flac|aac|mp4|webm)$/i.test(f.name));
       if (!list.length) {
-        toast("این فایل‌ها صوتی نیستند", "err");
+        toast(t("notMedia"));
         return;
       }
-      const newIds: string[] = [];
-      for (const f of list) {
+      for (let i = 0; i < list.length; i++) {
+        const f = list[i];
+        setUpload({ name: f.name, step: 0, pct: 8, done: i, total: list.length });
+        await sleep(250);
+        setUpload({ name: f.name, step: 0, pct: 34, done: i, total: list.length });
         try {
           const { buffer, url } = await decodeFile(f);
+          setUpload({ name: f.name, step: 1, pct: 66, done: i, total: list.length });
+          await sleep(220);
+          const peaks = extractPeaks(buffer, 130);
+          setUpload({ name: f.name, step: 2, pct: 90, done: i, total: list.length });
+          await sleep(200);
           const rt: TrackRuntime = {
-            id: `u-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            id: `u-${uid()}`,
             title: f.name.replace(/\.[^.]+$/, ""),
             artistId: "you",
             album: "فایل‌های شما",
@@ -299,349 +351,229 @@ export default function App() {
             plays: 0,
             ready: true,
             url,
-            peaks: extractPeaks(buffer, 130),
+            peaks,
             uploaded: true,
           };
-          newIds.push(rt.id);
           setTracks((prev) => [rt, ...prev]);
+          setUpload({ name: f.name, step: 2, pct: 100, done: i + 1, total: list.length });
+          await sleep(350);
         } catch {
-          toast(`خواندن «${f.name}» ممکن نشد`, "err");
+          toast(`${f.name} ✗`);
         }
       }
-      if (!newIds.length) return;
-      toast(`${faNum(newIds.length)} اثر به آرشیو تو اضافه شد`);
-      if (!currentId) playContext(newIds, newIds[0]);
-      else {
-        setQueue((prev) => {
-          const q = [...newIds, ...prev];
-          setQIndex((i) => i + newIds.length);
-          return q;
-        });
-      }
-    },
-    [toast, currentId, playContext]
-  );
-
-  /* درگ و دراپ سراسری */
-  useEffect(() => {
-    const hasFiles = (e: DragEvent) => e.dataTransfer?.types.includes("Files");
-    const onEnter = (e: DragEvent) => {
-      if (!hasFiles(e)) return;
-      dragDepth.current++;
-      setDragOver(true);
-    };
-    const onLeave = (e: DragEvent) => {
-      if (!hasFiles(e)) return;
-      dragDepth.current = Math.max(0, dragDepth.current - 1);
-      if (dragDepth.current === 0) setDragOver(false);
-    };
-    const onDrop = (e: DragEvent) => {
-      if (!hasFiles(e)) return;
-      e.preventDefault();
-      dragDepth.current = 0;
-      setDragOver(false);
-      if (e.dataTransfer?.files.length) void ingest(e.dataTransfer.files);
-    };
-    window.addEventListener("dragenter", onEnter);
-    window.addEventListener("dragleave", onLeave);
-    window.addEventListener("dragover", (e) => e.preventDefault());
-    window.addEventListener("drop", onDrop);
-    return () => {
-      window.removeEventListener("dragenter", onEnter);
-      window.removeEventListener("dragleave", onLeave);
-      window.removeEventListener("drop", onDrop);
-    };
-  }, [ingest]);
-
-  /* ---------- میان‌برهای کیبورد ---------- */
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const el = e.target as HTMLElement | null;
-      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
-      const seekBy = (d: number) => {
-        if (audio.duration) audio.currentTime = Math.min(audio.duration, Math.max(0, audio.currentTime + d));
-      };
-      switch (e.code) {
-        case "Space":
-          if (el && (el.tagName === "BUTTON" || el.getAttribute("role") === "button")) return;
-          e.preventDefault();
-          togglePlayRef.current();
-          break;
-        case "ArrowRight":
-          seekBy(-5);
-          break;
-        case "ArrowLeft":
-          seekBy(5);
-          break;
-        case "ArrowUp":
-          e.preventDefault();
-          setMuted(false);
-          setVolume((v) => Math.min(1, +(v + 0.05).toFixed(2)));
-          break;
-        case "ArrowDown":
-          e.preventDefault();
-          setVolume((v) => Math.max(0, +(v - 0.05).toFixed(2)));
-          break;
-        case "KeyN":
-          goNext();
-          break;
-        case "KeyB":
-          goPrev();
-          break;
-        case "KeyM":
-          setMuted((m) => !m);
-          break;
-        case "KeyS":
-          if (currentId) setStoryOpen((s) => !s);
-          break;
-        case "Digit1":
-          setVizMode("bars");
-          break;
-        case "Digit2":
-          setVizMode("orbit");
-          break;
-        case "Digit3":
-          setVizMode("pulse");
-          break;
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [audio, goNext, goPrev, currentId]);
-
-  /* ---------- علاقه‌مندی و صف ---------- */
-  const toggleLike = useCallback(
-    (id: string) => {
-      setLiked((prev) => {
-        const next = new Set(prev);
-        if (next.has(id)) {
-          next.delete(id);
-        } else {
-          next.add(id);
-          toast("به علاقه‌مندی‌ها اضافه شد ♥");
-        }
-        return next;
-      });
+      setUpload(null);
+      toast(t("uploadDoneAll"));
     },
     [toast]
   );
 
-  const removeFromQueue = useCallback(
-    (i: number) => {
-      if (i === qIndex) {
-        toast("اثر در حال پخش را نمی‌شود حذف کرد", "err");
+  /* ---------- احراز هویت ---------- */
+  const requireAuth = useCallback(
+    (fn: () => void) => {
+      if (!user) {
+        setAuthOpen(true);
         return;
       }
-      setQueue((prev) => prev.filter((_, x) => x !== i));
-      if (i < qIndex) setQIndex((x) => x - 1);
+      fn();
     },
-    [qIndex, toast]
+    [user]
   );
 
-  const toggleShuffle = useCallback(() => {
-    setShuffle((s) => {
-      const next = !s;
-      if (currentId) {
-        if (next) {
-          setQueue((prev) => [currentId, ...shuffleArr(prev.filter((id) => id !== currentId))]);
-          setQIndex(0);
-        } else if (contextRef.current) {
-          const ids = contextRef.current.ids.filter((id) => tracks.some((t) => t.id === id));
-          setQueue(ids);
-          setQIndex(Math.max(0, ids.indexOf(currentId)));
-        }
-        toast(next ? "پخش تصادفی روشن شد" : "پخش به ترتیب آرشیو برگشت");
-      }
-      return next;
+  const handleLogin = (u: User) => {
+    setUser(u);
+    saveUser(u);
+    setAuthOpen(false);
+    toast(`${t("welcome")} ${u.name} 👋`);
+  };
+  const handleLogout = () => {
+    setUser(null);
+    saveUser(null);
+    toast(t("logoutConfirm"));
+  };
+  const saveUserFn = (u: User) => {
+    setUser(u);
+    saveUser(u);
+    toast(t("artistSaved"));
+  };
+
+  /* ---------- استوری‌ها ---------- */
+  const updateStories = (fn: (s: Story[]) => Story[]) => {
+    setStories((prev) => {
+      const nx = fn(prev);
+      saveStories(nx);
+      return nx;
     });
-  }, [currentId, tracks, toast]);
+  };
+  const likeStory = (id: string) =>
+    requireAuth(() =>
+      updateStories((s) =>
+        s.map((x) => {
+          if (x.id !== id) return x;
+          const has = x.likes.includes(user!.id);
+          return { ...x, likes: has ? x.likes.filter((l) => l !== user!.id) : [...x.likes, user!.id] };
+        })
+      )
+    );
+  const commentStory = (id: string, text: string) =>
+    requireAuth(() =>
+      updateStories((s) =>
+        s.map((x) =>
+          x.id === id
+            ? { ...x, comments: [...x.comments, { id: uid(), userId: user!.id, name: user!.name, avatar: user!.avatar, text, ts: Date.now() }] }
+            : x
+        )
+      )
+    );
+  const saveStory = (id: string) => {
+    setSavedIds((prev) => {
+      const has = prev.includes(id);
+      const nx = has ? prev.filter((x) => x !== id) : [...prev, id];
+      saveSaved(nx);
+      if (!has) toast(t("savedStory"));
+      return nx;
+    });
+  };
+  const postStory = (data: { trackId: string; isVideo: boolean; theme: string; caption: string }) => {
+    if (!user) return;
+    const st: Story = {
+      id: uid(),
+      userId: user.id,
+      userName: user.name,
+      userAvatar: user.avatar,
+      userIsArtist: user.isArtist,
+      trackId: data.trackId,
+      isVideo: data.isVideo,
+      theme: data.theme,
+      caption: data.caption,
+      likes: [],
+      comments: [],
+      saves: [],
+      ts: Date.now(),
+    };
+    updateStories((s) => [st, ...s]);
+    setCreateOpen(false);
+    toast(t("storyPosted"));
+    setStoryIndex(0);
+  };
 
-  /* ---------- اشتراک‌گذاری استوری ---------- */
-  const shareStory = useCallback(
-    async (t: TrackRuntime) => {
-      const ready = await ensureReady(t);
-      const blob = await exportStoryCard(ready);
-      const file = new File([blob], `irantify-story-${t.id}.png`, { type: "image/png" });
-      let shared = false;
-      try {
-        if (navigator.canShare?.({ files: [file] })) {
-          await navigator.share({ files: [file], title: "استوری ایران‌تیفای", text: `${t.title} — در ایران‌تیفای گوش کن` });
-          shared = true;
+  /* ---------- لایک ---------- */
+  const toggleLike = (id: string) =>
+    requireAuth(() => {
+      setLiked((prev) => {
+        const nx = new Set(prev);
+        if (nx.has(id)) nx.delete(id);
+        else {
+          nx.add(id);
+          toast(t("addedToFav"));
         }
-      } catch {
-        /* کاربر لغو کرد */
-      }
-      if (!shared) {
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = file.name;
-        a.click();
-        window.setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-      }
-      toast("استوری ساخته و ذخیره شد");
-    },
-    [ensureReady, toast]
-  );
+        localStorage.setItem(LS_LIKED, JSON.stringify([...nx]));
+        return nx;
+      });
+    });
 
-  /* ---------- نمای جاری ---------- */
-  const tableProps = {
+  /* ---------- اکولایزر ---------- */
+  const applyPreset = (id: string) => {
+    const pr = presetById(id);
+    if (!pr) return;
+    setPresetId(id);
+    localStorage.setItem(LS_PRESET, id);
+    applyGains([...pr.gains]);
+  };
+  const handleGains = (g: number[]) => {
+    setPresetId("custom");
+    localStorage.setItem(LS_PRESET, "custom");
+    applyGains(g);
+  };
+  const optimizeCar = () => {
+    const g = optimizeCarGains(car);
+    localStorage.setItem(LS_CAR, JSON.stringify(car));
+    setPresetId("custom");
+    applyGains(g);
+  };
+  const saveCarPreset = (name: string) => {
+    const nx = [...savedCars, { name, gains: optimizeCarGains(car), car }];
+    setSavedCars(nx);
+    localStorage.setItem(LS_SAVEDCARS, JSON.stringify(nx));
+    localStorage.setItem(LS_CAR, JSON.stringify(car));
+    toast(t("carSaved"));
+  };
+
+  /* ---------- هنرمند ---------- */
+  const playArtist = (id: string) => {
+    const list = tracksOfArtist(id).map((x) => tracks.find((tr) => tr.id === x.id)).filter(Boolean) as TrackRuntime[];
+    if (list.length) playFromList(list, list[0].id);
+  };
+
+  const screenBase = {
     tracks,
-    currentId,
-    playing,
+    playingId: currentId,
+    isPlaying: playing,
     liked,
     loadingId,
     onPlay: playTrack,
     onLike: toggleLike,
   };
 
-  const openGenre = (g: string) => {
-    setGenreFilter(g);
-    setQuery("");
-    setView({ name: "search" });
-  };
-
-  const playArtist = (a: Artist) => {
-    const ids = tracks.filter((t) => t.artistId === a.id).map((t) => t.id);
-    if (ids.length) playContext(ids, ids[0]);
-  };
-
-  let content: React.ReactNode;
-  switch (view.name) {
-    case "search":
-      content = (
-        <SearchView {...tableProps} query={query} setQuery={setQuery} genre={genreFilter} setGenre={setGenreFilter} />
-      );
-      break;
-    case "artists":
-      content = <ArtistsView onOpen={(id) => setView({ name: "artist", id })} />;
-      break;
-    case "artist": {
-      const artist = artistById(view.id);
-      content = artist ? (
-        <ArtistView {...tableProps} artist={artist} onPlayAll={() => playArtist(artist)} />
-      ) : null;
-      break;
-    }
-    case "liked":
-      content = <LikedView {...tableProps} />;
-      break;
-    default:
-      content = (
-        <HomeView
-          {...tableProps}
-          onOpenArtist={(id) => setView({ name: "artist", id })}
-          onOpenGenre={openGenre}
-          onPlayArtist={playArtist}
-          onSearch={() => setView({ name: "search" })}
-        />
-      );
-  }
-
-  const NAV: { key: View["name"]; label: string; icon: React.ReactNode }[] = [
-    { key: "home", label: "خانه", icon: <IconHome size={17} /> },
-    { key: "search", label: "جستجو", icon: <IconSearch size={17} /> },
-    { key: "artists", label: "هنرمندان", icon: <IconArtists size={17} /> },
-    { key: "liked", label: "علاقه‌مندی‌ها", icon: <IconHeart size={17} /> },
-  ];
-
-  const navBtn = (n: (typeof NAV)[number], compact = false) => {
-    const active = view.name === n.key || (n.key === "artists" && view.name === "artist");
-    return (
-      <button
-        key={n.key}
-        onClick={() => setView({ name: n.key } as View)}
-        title={n.label}
-        className={`flex items-center gap-3 rounded-lg transition-all duration-200 active:scale-95 ${
-          compact ? "p-2.5" : "w-full px-3.5 py-2.5"
-        } ${active ? "bg-turq/12 text-turq shadow-inner" : "text-mist hover:bg-foam/5 hover:text-foam"}`}
-      >
-        {n.icon}
-        {!compact && <span className="text-sm font-bold">{n.label}</span>}
-        {!compact && n.key === "liked" && liked.size > 0 && (
-          <span className="mr-auto rounded-full bg-coral/15 px-2 py-0.5 font-mono text-[10px] text-coral">{faNum(liked.size)}</span>
-        )}
-      </button>
-    );
-  };
-
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-night-900 text-foam">
-      {/* سربرگ موبایل */}
-      <header className="flex items-center gap-1 border-b border-foam/8 bg-night-900/90 px-3 py-2.5 lg:hidden">
-        <span className="flex items-center gap-2 text-turq">
-          <Logo size={24} />
-          <span className="font-display text-lg leading-none text-foam">ایران‌تیفای</span>
-        </span>
-        <span className="mx-2 h-5 w-px bg-foam/10" />
-        <div className="flex flex-1 items-center gap-1">
-          {NAV.map((n) => navBtn(n, true))}
-        </div>
-        <button
-          onClick={() => fileRef.current?.click()}
-          aria-label="آپلود صدا"
-          className="rounded-full bg-turq/12 p-2.5 text-turq transition-transform active:scale-90"
-        >
-          <IconUpload size={16} />
-        </button>
-      </header>
-
-      <div className="flex min-h-0 flex-1">
-        {/* سایدبار */}
-        <aside className="hidden w-[228px] shrink-0 flex-col border-l border-foam/8 bg-night-900/80 lg:flex">
-          <div className="flex items-center gap-2.5 px-5 pb-6 pt-6 text-turq">
-            <Logo size={30} />
-            <span>
-              <span className="block font-display text-xl leading-none text-foam">ایران‌تیفای</span>
-              <span className="mt-0.5 block font-mono text-[8.5px] tracking-[0.34em] text-dim">IRANTIFY</span>
-            </span>
-          </div>
-          <nav className="space-y-1 px-3">{NAV.map((n) => navBtn(n))}</nav>
-
-          <div className="mx-4 my-5 h-px bg-foam/8" />
-
-          <button
-            onClick={() => fileRef.current?.click()}
-            className="group mx-4 rounded-xl border border-dashed border-turq/30 p-4 text-right transition-all duration-300 hover:border-turq/70 hover:bg-turq/6"
-          >
-            <span className="flex items-center gap-2 text-turq">
-              <IconUpload size={16} className="transition-transform duration-300 group-hover:-translate-y-0.5" />
-              <span className="text-sm font-extrabold">آپلود صدا</span>
-            </span>
-            <span className="mt-1.5 block text-[11px] leading-5 text-mist">
-              فایل‌های خودت را رها کن تا به داستان اضافه شوند — یا همین‌جا بزن.
-            </span>
-          </button>
-
-          <div className="mt-auto px-5 py-4">
-            <p className="font-mono text-[9px] leading-5 text-dim">
-              Space پخش · N بعدی · S استوری
-              <br />
-              M بی‌صدا · ۱۲۳ حالت بصری‌ساز
-            </p>
-            <p className="mt-2 font-mono text-[9px] text-dim/70">ساخته‌شده با Web Audio — رندر زندهٔ دستگاه‌ها</p>
-          </div>
-        </aside>
-
-        {/* صحنهٔ اصلی */}
-        <main className="relative min-w-0 flex-1">
-          <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
-            <div className="absolute inset-0 opacity-[0.13]">
-              <Visualizer analyser={analyser} mode={vizMode} playing={playing} hue={hue} />
-            </div>
-            <div
-              className="absolute -right-24 -top-24 h-[420px] w-[420px] rounded-full opacity-20 blur-3xl animate-drift-a"
-              style={{ background: `hsl(${hue} 70% 45%)` }}
-            />
-            <div className="absolute -bottom-32 -left-20 h-[380px] w-[380px] rounded-full bg-saffron opacity-[0.07] blur-3xl animate-drift-b" />
-            <div className="girih absolute inset-0 opacity-30" />
-            <div className="absolute inset-0 bg-night-900/45" />
-          </div>
-          <div className="slim-scroll relative z-10 h-full overflow-y-auto">{content}</div>
-        </main>
+      {/* پس‌زمینهٔ محیطی */}
+      <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
+        <div className="girih absolute inset-0 opacity-40" />
+        <div className="animate-drift-a absolute -top-24 start-1/4 h-72 w-72 rounded-full bg-turq opacity-[0.07] blur-3xl" />
+        <div className="animate-drift-b absolute -end-20 bottom-1/4 h-64 w-64 rounded-full bg-saffron opacity-[0.05] blur-3xl" />
+      </div>
+      <div className="slim-scroll relative z-10 min-h-0 flex-1 overflow-y-auto">
+        {tab === "home" && (
+          <HomeScreen
+            {...screenBase}
+            user={user}
+            stories={stories}
+            onOpenStory={(i) => setStoryIndex(i)}
+            onCreateStory={() =>
+              requireAuth(() => {
+                setCreateTrackId(null);
+                setCreateOpen(true);
+              })
+            }
+            onGoMoods={() => setTab("moods")}
+            onGoSearch={() => setTab("moods")}
+          />
+        )}
+        {tab === "moods" && <MoodScreen {...screenBase} mood={mood} place={place} onMood={setMood} onPlace={setPlace} />}
+        {tab === "artists" && (
+          <ArtistsScreen
+            onOpen={(id) => setLanding(id)}
+            onPlayArtist={playArtist}
+            user={user}
+            onOpenMyArtist={() => setLanding("me")}
+          />
+        )}
+        {tab === "library" && (
+          <LibraryScreen
+            user={user}
+            tracks={tracks}
+            playingId={currentId}
+            isPlaying={playing}
+            liked={liked}
+            loadingId={loadingId}
+            savedIds={savedIds}
+            onPlay={playTrack}
+            onLike={toggleLike}
+            onLogin={() => setAuthOpen(true)}
+            onLogout={handleLogout}
+            onSaveUser={saveUserFn}
+            onOpenEq={() => setEqOpen(true)}
+            onOpenMyArtist={() => setLanding("me")}
+            onOpenStudio={() => requireAuth(() => setStudioOpen(true))}
+            onUpload={() => requireAuth(() => fileRef.current?.click())}
+            savedTab={savedTab}
+            onSavedTab={setSavedTab}
+          />
+        )}
       </div>
 
-      {/* نوار پخش */}
-      <PlayerBar
+      {/* پخش‌کننده */}
+      <MobilePlayer
         current={current}
         playing={playing}
         loading={loadingId === currentId}
@@ -649,73 +581,52 @@ export default function App() {
         analyser={analyser}
         shuffle={shuffle}
         repeat={repeat}
-        liked={liked}
-        volume={volume}
-        muted={muted}
         vizMode={vizMode}
-        showQueue={showQueue}
-        queueTracks={queueTracks}
-        queueIndex={qIndex}
         onTogglePlay={() => togglePlayRef.current()}
         onNext={() => goNext()}
         onPrev={goPrev}
-        onToggleShuffle={toggleShuffle}
+        onToggleShuffle={() => setShuffle((s) => !s)}
         onCycleRepeat={() => setRepeat((r) => (r === "off" ? "all" : r === "all" ? "one" : "off"))}
-        onLike={toggleLike}
-        onVolume={(v) => {
-          setVolume(v);
-          setMuted(false);
-        }}
-        onToggleMute={() => setMuted((m) => !m)}
         onVizMode={setVizMode}
-        onToggleQueue={() => setShowQueue((s) => !s)}
-        onSelectQueue={selectQueueIndex}
-        onRemoveQueue={removeFromQueue}
-        onOpenStory={() => setStoryOpen(true)}
-        onUpload={() => fileRef.current?.click()}
+        onOpenStory={() =>
+          current
+            ? setCreateOpenWithData()
+            : requireAuth(() => {
+                setCreateTrackId(null);
+                setCreateOpen(true);
+              })
+        }
+        onOpenEq={() => setEqOpen(true)}
       />
 
-      {/* استوری */}
-      {storyOpen && current && queueTracks.length > 0 && (
-        <StoryViewer
-          items={queueTracks}
-          index={qIndex}
-          playing={playing}
-          analyser={analyser}
-          onNavigate={selectQueueIndex}
-          onClose={() => setStoryOpen(false)}
-          onTogglePlay={() => togglePlayRef.current()}
-          onHold={(h) => {
-            if (h) audio.pause();
-            else if (playing) void audio.play().catch(() => undefined);
-          }}
-          onShare={shareStory}
-        />
-      )}
+      <BottomNav tab={tab} onTab={(tb) => { setTab(tb); setLanding(null); }} onEq={() => setEqOpen(true)} />
 
-      {/* پوشش درگ */}
-      {dragOver && (
-        <div className="fixed inset-0 z-70 flex items-center justify-center bg-night-950/80 p-6 backdrop-blur-sm">
-          <div className="animate-pop flex w-full max-w-md flex-col items-center gap-4 rounded-3xl border-2 border-dashed border-turq/70 bg-night-850/90 px-8 py-14 text-center shadow-2xl shadow-turq/10">
-            <span className="flex h-16 w-16 items-center justify-center rounded-full bg-turq/12 text-turq">
-              <IconUpload size={28} />
-            </span>
-            <p className="font-display text-2xl text-foam">فایل‌های صوتی را رها کن</p>
-            <p className="text-xs text-mist">MP3 · WAV · OGG · M4A · FLAC — به داستانِ پخش اضافه می‌شوند</p>
+      {/* نوار پیشرفت آپلود */}
+      {upload && (
+        <div className="fixed bottom-24 left-1/2 z-50 w-[88%] max-w-sm -translate-x-1/2">
+          <div className="animate-rise rounded-2xl border border-turq/30 bg-night-850/98 p-3.5 shadow-2xl shadow-turq/10 backdrop-blur-xl">
+            <div className="flex items-center gap-2.5">
+              <span className="h-6 w-6 shrink-0 animate-spin rounded-full border-2 border-turq/25 border-t-turq" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-extrabold text-foam">{upload.name}</p>
+                <p className="text-[10px] text-mist">
+                  {[t("reading"), t("decoding"), t("analyzing")][upload.step]} · {num(upload.done + 1)} {t("of")} {num(upload.total)} {t("filesInQueue")}
+                </p>
+              </div>
+              <span className="font-mono text-xs font-bold text-turq">{num(upload.pct)}{lang === "fa" ? "٪" : "%"}</span>
+            </div>
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-night-700">
+              <div className="h-full rounded-full bg-gradient-to-r from-turq to-saffron transition-all duration-300" style={{ width: `${upload.pct}%` }} />
+            </div>
           </div>
         </div>
       )}
 
-      {/* توست‌ها */}
-      <div className="pointer-events-none fixed bottom-28 left-1/2 z-80 flex -translate-x-1/2 flex-col items-center gap-2">
-        {toasts.map((t) => (
-          <div
-            key={t.id}
-            className={`animate-toast-in rounded-full border px-4 py-2 text-xs font-bold shadow-xl shadow-black/50 backdrop-blur-md ${
-              t.kind === "err" ? "border-coral/50 bg-night-850/95 text-coral" : "border-turq/40 bg-night-850/95 text-foam"
-            }`}
-          >
-            {t.msg}
+      {/* توست */}
+      <div className="pointer-events-none fixed bottom-32 left-1/2 z-[60] -translate-x-1/2">
+        {toasts.map((x) => (
+          <div key={x.id} className="animate-toast-in rounded-full border border-turq/40 bg-night-850/95 px-4 py-2 text-xs font-bold text-foam shadow-xl shadow-black/50 backdrop-blur-md">
+            {x.msg}
           </div>
         ))}
       </div>
@@ -723,7 +634,7 @@ export default function App() {
       <input
         ref={fileRef}
         type="file"
-        accept="audio/*,.mp3,.wav,.ogg,.m4a,.flac,.aac"
+        accept="audio/*,video/*,.mp3,.wav,.ogg,.m4a,.flac,.mp4,.webm"
         multiple
         className="hidden"
         onChange={(e) => {
@@ -731,6 +642,73 @@ export default function App() {
           e.target.value = "";
         }}
       />
+
+      {/* اورلی‌ها */}
+      {authOpen && <AuthScreen onDone={handleLogin} onSkip={() => setAuthOpen(false)} />}
+
+      {storyIndex !== null && (
+        <StoryViewer
+          stories={stories}
+          index={storyIndex}
+          onNavigate={setStoryIndex}
+          onClose={() => setStoryIndex(null)}
+          user={user}
+          tracks={tracks}
+          playingId={currentId}
+          isPlaying={playing}
+          onPlayTrack={(id) => playTrackRef.current(id)}
+          onLike={likeStory}
+          onComment={commentStory}
+          onSave={saveStory}
+          savedIds={savedIds}
+          onRequireAuth={() => setAuthOpen(true)}
+          onToast={toast}
+        />
+      )}
+
+      {createOpen && user && (
+        <CreateStory tracks={tracks} user={user} initialTrackId={createTrackId} onClose={() => setCreateOpen(false)} onPost={postStory} />
+      )}
+
+      {eqOpen && (
+        <EqualizerScreen
+          gains={gains}
+          onGains={handleGains}
+          activePreset={presetId}
+          onPreset={applyPreset}
+          car={car}
+          onCar={(c) => {
+            setCar(c);
+            localStorage.setItem(LS_CAR, JSON.stringify(c));
+          }}
+          onOptimize={optimizeCar}
+          savedCars={savedCars}
+          onSaveCar={saveCarPreset}
+          onClose={() => setEqOpen(false)}
+          onToast={toast}
+        />
+      )}
+
+      {studioOpen && user && <ArtistStudio user={user} onClose={() => setStudioOpen(false)} onSave={saveUserFn} />}
+
+      {landing && (
+        <ArtistLanding
+          {...screenBase}
+          artistId={landing === "me" ? null : landing}
+          user={user}
+          onBack={() => setLanding(null)}
+        />
+      )}
     </div>
   );
+
+  /* استوری از پخش‌کننده: با اثر جاری */
+  function setCreateOpenWithData() {
+    if (!user) {
+      setAuthOpen(true);
+      return;
+    }
+    setCreateTrackId(currentId);
+    setCreateOpen(true);
+  }
 }

@@ -79,6 +79,28 @@ const STR: Record<Lang, Record<string, string>> = {
     members: "کاربر ایران‌تیفای",
     back: "برگشت",
     nightDrive: "شب‌گردی",
+    // مود و فضا
+    space: "فضا", pickMood: "چه مودی داری؟", pickPlace: "کجا هستی؟", moodNow: "مودِ تو",
+    matchedTracks: "اثرهای هماهنگ با فازت", resetMood: "پاک کردن مود",
+    // ویدیو
+    video: "ویدیو", watchVideo: "تماشای ویدیو", videoNow: "در حال پخش ویدیو",
+    // آپلود
+    uploadingFile: "در حال ارسال فایل", uploadStep: "مرحله", of: "از", filesInQueue: "فایل در صف",
+    uploadDoneAll: "همهٔ فایل‌ها ارسال شد",
+    // استوری و اشتراک
+    noStories: "هنوز استوری‌ای نیست", beFirst: "اولین استوری رو تو بساز",
+    myStories: "استوری‌های من", sendStory: "استوری بفرست", replay: "پخش دوباره",
+    shareTo: "اشتراک در", whatsapp: "واتساپ", telegram: "تلگرام", instagram: "اینستاگرام",
+    twitter: "توییتر", copyLink: "کپی لینک", downloadCard: "دانلود کارت", savedStory: "ذخیره شد",
+    likesWord: "لایک", commentLogin: "برای نظر دادن وارد شو", yourComment: "نظرت…",
+    savedTab: "ذخیره‌شده",
+    // هنرمند
+    artistStudio: "استودیوی هنرمند", becomeArtist: "هنرمند شو", djMode: "دی‌جی / تنظیم‌کننده",
+    aiArtist: "خوانندهٔ هوش مصنوعی", monthlyListeners: "شنوندهٔ ماهانه", listenOnApp: "پخش در اپ",
+    coverPick: "انتخاب رنگ کاور", worksHint: "اثرها و کاورهای منتشرشده‌ات",
+    carAudioLab: "لابراتوار صدای خودرو", bandCount: "تعداد باند", settings: "تنظیمات",
+    aboutApp: "دربارهٔ اپ", version: "نسخه", appearance: "ظاهر", notifications: "اعلان‌ها",
+    membersCount: "عضو ایران‌تیفای",
   },
   en: {
     appName: "Irantify",
@@ -123,7 +145,7 @@ const STR: Record<Lang, Record<string, string>> = {
     writeComment: "Add a comment…", noComments: "Be the first to comment", comments: "Comments",
     storySavedMsg: "Story saved", shareDone: "Story card ready",
     loginToPost: "Sign in first to post stories",
-    artistName: "Stage name", tagline: "Short tagline", bioLabel: "About you",
+    artistName: "Stage name", taglineLabel: "Short tagline", bioLabel: "About you",
     coverLabel: "Page cover (image)", genreLabel: "Main genre",
     addWork: "Add track / album", workTitle: "Title", workKind: "Type",
     kindTrack: "Single", kindVideo: "Music video", kindAlbum: "Album",
@@ -154,6 +176,28 @@ const STR: Record<Lang, Record<string, string>> = {
     members: "Irantify member",
     back: "Back",
     nightDrive: "Night drive",
+    // moods & places
+    space: "Space", pickMood: "What's your mood?", pickPlace: "Where are you?", moodNow: "Your vibe",
+    matchedTracks: "Tracks matched to your vibe", resetMood: "Clear mood",
+    // video
+    video: "Video", watchVideo: "Watch video", videoNow: "Now playing video",
+    // upload
+    uploadingFile: "Uploading file", uploadStep: "Step", of: "of", filesInQueue: "files in queue",
+    uploadDoneAll: "All files uploaded",
+    // stories & share
+    noStories: "No stories yet", beFirst: "Make the first one",
+    myStories: "My stories", sendStory: "Send a story", replay: "Replay",
+    shareTo: "Share to", whatsapp: "WhatsApp", telegram: "Telegram", instagram: "Instagram",
+    twitter: "Twitter", copyLink: "Copy link", downloadCard: "Download card", savedStory: "Saved",
+    likesWord: "likes", commentLogin: "Sign in to comment", yourComment: "Your comment…",
+    savedTab: "Saved",
+    // artist
+    artistStudio: "Artist studio", becomeArtist: "Become an artist", djMode: "DJ / Producer",
+    aiArtist: "AI vocalist", monthlyListeners: "monthly listeners", listenOnApp: "Play in app",
+    coverPick: "Pick cover color", worksHint: "Your released works & covers",
+    carAudioLab: "Car audio lab", bandCount: "Band count", settings: "Settings",
+    aboutApp: "About", version: "Version", appearance: "Appearance", notifications: "Notifications",
+    membersCount: "Irantify members",
   },
 };
 
